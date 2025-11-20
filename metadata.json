@@ -1,0 +1,5 @@
+{
+  "name": "SentinAI - Next-Gen Firewall Dashboard",
+  "description": "A comprehensive React-based security dashboard utilizing Gemini 2.5 for intelligent threat detection, including SQLi, Phishing, Malware, and NGFW traffic analysis.",
+  "requestFramePermissions": []
+}
