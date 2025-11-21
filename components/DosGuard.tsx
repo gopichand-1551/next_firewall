@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Zap, ShieldAlert, Activity, Server, RefreshCcw, TrendingUp, Lock } from 'lucide-react';
 import { analyzeContent } from '../services/gemini';
@@ -20,6 +20,46 @@ export const DosGuard: React.FC<DosGuardProps> = ({ addLog }) => {
   const [isMitigationActive, setIsMitigationActive] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [stats, setStats] = useState({ currentRps: 45, peakRps: 80, activeIPs: 120, dropped: 0 });
+  
+  // Track if we have already analyzed the current attack session to avoid API spam
+  const attackAnalyzed = useRef(false);
+
+  // Reset analysis flag when mode changes
+  useEffect(() => {
+    attackAnalyzed.current = false;
+  }, [activeMode]);
+
+  // Shared Analysis Logic
+  const runAnalysis = async (rps: number, latency: number, ips: number, mode: string) => {
+    setAnalyzing(true);
+    
+    const prompt = `Traffic Analysis Report:
+    - Current RPS: ${rps}
+    - Average Latency: ${latency}ms
+    - Active Source IPs: ${ips}
+    - Traffic Pattern: ${mode === 'NORMAL' ? 'Steady baseline' : 'Sudden spike detected'}
+    - Protocol Distribution: ${mode === 'UDP_FLOOD' ? '90% UDP' : '95% TCP/HTTP'}
+    
+    Determine the type of attack (if any) and recommend mitigation strategies.`;
+
+    try {
+      const analysis = await analyzeContent(prompt, AnalysisType.DOS_DDOS);
+
+      addLog({
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        type: AnalysisType.DOS_DDOS,
+        severity: analysis.severity,
+        source: 'Traffic-Flow-Analyzer',
+        details: analysis.reasoning,
+        blocked: isMitigationActive
+      });
+    } catch (e) {
+      console.error("Analysis failed", e);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   // Simulation Loop
   useEffect(() => {
@@ -62,6 +102,16 @@ export const DosGuard: React.FC<DosGuardProps> = ({ addLog }) => {
         setStats(prev => ({ ...prev, dropped: prev.dropped + Math.floor(newRps * 9) }));
       }
 
+      // Auto-Trigger AI Analysis if threshold breached and not yet analyzed
+      const threshold = activeMode === 'SLOWLORIS' ? 1000 : 500; // Latency threshold for Slowloris, RPS for others
+      const metric = activeMode === 'SLOWLORIS' ? latency : newRps;
+      
+      if (activeMode !== 'NORMAL' && !attackAnalyzed.current && metric > threshold && !isMitigationActive) {
+        attackAnalyzed.current = true;
+        // Trigger analysis with the values from this specific tick
+        runAnalysis(newRps, latency, ips, activeMode);
+      }
+
       setStats(prev => ({
         currentRps: newRps,
         peakRps: Math.max(prev.peakRps, newRps),
@@ -75,42 +125,13 @@ export const DosGuard: React.FC<DosGuardProps> = ({ addLog }) => {
         return newData;
       });
 
-      // Auto-log if threshold breached without mitigation
-      if (newRps > 200 && !isMitigationActive) {
-        // We don't want to spam logs, just maybe once in a while or handle visually
-      }
-
     }, 1000);
 
     return () => clearInterval(interval);
   }, [activeMode, isMitigationActive]);
 
-  const handleAiAnalysis = async () => {
-    setAnalyzing(true);
-    
-    // Construct a prompt describing current metrics
-    const prompt = `Traffic Analysis Report:
-    - Current RPS: ${stats.currentRps}
-    - Average Latency: ${data[data.length-1]?.latency}ms
-    - Active Source IPs: ${stats.activeIPs}
-    - Traffic Pattern: ${activeMode === 'NORMAL' ? 'Steady baseline' : 'Sudden spike detected'}
-    - Protocol Distribution: ${activeMode === 'UDP_FLOOD' ? '90% UDP' : '95% TCP/HTTP'}
-    
-    Determine the type of attack (if any) and recommend mitigation strategies.`;
-
-    const analysis = await analyzeContent(prompt, AnalysisType.DOS_DDOS);
-
-    addLog({
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      type: AnalysisType.DOS_DDOS,
-      severity: analysis.severity,
-      source: 'Traffic-Flow-Analyzer',
-      details: analysis.reasoning,
-      blocked: isMitigationActive
-    });
-
-    setAnalyzing(false);
+  const handleManualAnalysis = () => {
+    runAnalysis(stats.currentRps, data[data.length-1]?.latency || 0, stats.activeIPs, activeMode);
   };
 
   return (
@@ -195,7 +216,7 @@ export const DosGuard: React.FC<DosGuardProps> = ({ addLog }) => {
              </p>
              
              <button
-                onClick={handleAiAnalysis}
+                onClick={handleManualAnalysis}
                 disabled={analyzing}
                 className="w-full bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold py-3 rounded-lg shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
              >
